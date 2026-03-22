@@ -12,5 +12,9 @@
     "model": "gpt-4o",
     "base_url": "https://api.openai.com/v1",
     "organization": ""
+  },
+  "embedding": {
+    "model": "embo-01",
+    "base_url": "https://api.minimaxi.com/v1"
   }
 }

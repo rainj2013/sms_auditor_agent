@@ -20,6 +20,8 @@ build/
 *.swp
 *.swo
 
+# Local generated
+
 # OS
 .DS_Store
 Thumbs.db

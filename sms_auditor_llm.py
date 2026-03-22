@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from llm_providers import LLMMessage, get_provider
+from rule_retriever import RuleRetriever
 
 # ─────────────────────────────────────────────
 # 路径
@@ -48,9 +49,12 @@ class AuditResult:
 # 规则加载
 # ─────────────────────────────────────────────
 
-def load_all_rules() -> str:
-    """加载所有合规规范文档，拼接为纯文本"""
+def load_rules(sms_type: str | None = None) -> str:
+    """加载合规规范文档
 
+    - sms_type 为 None 时：只加载通用规则
+    - sms_type 指定时：加载通用规则 + 对应类型的专项规则
+    """
     rule_files = {
         "00_短信合规总纲.md": "通用规则（所有短信类型适用）",
         "01_验证码短信规范.md": "验证码短信规则",
@@ -59,13 +63,32 @@ def load_all_rules() -> str:
         "04_权益通知短信规范.md": "权益通知短信规则",
     }
 
+    type_map = {
+        "验证码": "01_验证码短信规范.md",
+        "营销": "02_营销短信规范.md",
+        "催收": "03_催收短信规范.md",
+        "权益通知": "04_权益通知短信规范.md",
+    }
+
     content_lines = ["# 合规规范数据库\n"]
-    for filename, desc in rule_files.items():
+
+    # 通用规则（始终加载）
+    filepath = os.path.join(RULES_DIR, "00_短信合规总纲.md")
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read()
+        content_lines.append(f"\n## 通用规则（来源：00_短信合规总纲.md）\n")
+        content_lines.append(text)
+
+    # 类型专项规则（Round 2+ 时加载）
+    if sms_type and sms_type in type_map:
+        filename = type_map[sms_type]
         filepath = os.path.join(RULES_DIR, filename)
         if os.path.exists(filepath):
             with open(filepath, "r", encoding="utf-8") as f:
                 text = f.read()
-            content_lines.append(f"\n## {desc}（来源：{filename}）\n")
+            desc = filename.split("_", 1)[1].replace(".md", "")
+            content_lines.append(f"\n## {sms_type}专项规则（来源：{filename}）\n")
             content_lines.append(text)
 
     return "\n".join(content_lines)
@@ -88,11 +111,33 @@ def identify_sms_type(sms: str) -> str:
 # System Prompt 构造
 # ─────────────────────────────────────────────
 
-def build_system_prompt(rules_text: str) -> str:
-    return """你是一名专业的金融行业短信合规审核员。
+def build_system_prompt(rules_text: str, round: int = 1) -> str:
+    if round == 1:
+        return f"""你是一名专业的金融行业短信合规审核员。
 
 ## 你的职责
-收到一条短信内容和合规规则后，执行多步推理（ReAct），判断短信是否符合规范，并给出修改建议。
+收到短信内容和合规规则后，分阶段审核。第一阶段先根据通用规则判断短信类型并检查一票否决项。
+
+## 合规规则全文
+{rules_text}
+
+## 第一轮任务
+1. 根据短信内容判断类型（验证码/营销/催收/权益通知）
+2. 检查通用红线：伪造主体、恐吓威胁、伪造法律文书、泄露隐私
+3. 输出一句话结论，告知进入第二轮
+
+## 审核原则（通用红线）
+- 伪造发送主体：冒充银行/监管/政府 → 🔴一票否决
+- 恐吓威胁：威胁人身安全、恐吓上门 → 🔴一票否决
+- 伪造法律文书：冒充法院/公安 → 🔴一票否决
+- 泄露隐私：明文展示身份证/完整银行卡 → 🔴一票否决
+
+请开始第一轮审核。"""
+    else:
+        return f"""你是一名专业的金融行业短信合规审核员。
+
+## 你的职责
+第二阶段：结合专项规则完成最终审核，输出 JSON 结果。
 
 ## 合规规则全文
 {rules_text}
@@ -106,26 +151,20 @@ def build_system_prompt(rules_text: str) -> str:
 - sms_type：短信类型（验证码/营销/催收/权益通知/未知）
 - overall：审核结果（🟢 合规 / 🟡 整改 / 🔴 违规）
 - level：合规等级（green / yellow / red）
-- reason：判定理由，一句话说明
-- checks：数组，每项检查结果，category 为检查类别
-- corrected_content：修改后的短信内容（如果完全合规则为空字符串）
-
-## ReAct 推理要求
-**必须**在给出 JSON 之前，先用中文写出你的推理过程（Thought / Action / Observation 格式），每一项违规都要有具体的条文依据。
+- reason：判定理由
+- checks：检查项数组
+- corrected_content：修改后内容
 
 ## 审核原则
-1. 先识别短信类型，对应到对应规范章节
-2. 检查通用红线（所有类型均适用）：伪造主体、保证收益、恐吓威胁、伪造法律文书、明文泄露隐私
-3. 按类型逐条对照规范检查
-4. 存在一票否决项直接判🔴违规
-5. 违规内容需给出修改后的合规版本
+1. 存在一票否决项直接判🔴违规
+2. 违规内容需给出修改后的合规版本
 
 ## 合规等级说明
 - 🟢 green：完全符合所有规范
 - 🟡 yellow：存在需整改项（信息不完整/警告项）
 - 🔴 red：存在违规内容或一票否决项
 
-请开始审核。""".format(rules_text=rules_text)
+请输出最终 JSON 审核结果。"""
 
 
 # ─────────────────────────────────────────────
@@ -140,26 +179,58 @@ class ReActSMSAuditor:
 
     MAX_ITERATIONS = 3  # 最多推理轮数，防止无限循环
 
-    def __init__(self, sms_content: str, provider=None):
+    def __init__(self, sms_content: str, provider=None, sms_type: str | None = None):
         self.sms = sms_content.strip()
         self.provider = provider
-        self.rules_text = load_all_rules()
-        self.sms_type = identify_sms_type(self.sms)
+        self.sms_type = sms_type if sms_type else identify_sms_type(self.sms)
         self.reasoning_steps: list[str] = []
+        self.retriever = RuleRetriever()
 
-    def _build_messages(self, assistant_reasoning: str = "") -> list[LLMMessage]:
-        """构造对话消息"""
-        system = build_system_prompt(self.rules_text)
-        user = f"""## 待审核短信
+    def _build_messages(self, assistant_reasoning: str = "", round: int = 1) -> list[LLMMessage]:
+        """构造对话消息
+
+        - round=1：只加载通用规则，LLM 先判断类型并检查通用红线
+        - round=2+：通过向量检索召回相关规则片段，输出最终 JSON
+        """
+        if round == 1:
+            rules_text = load_rules(None)  # 只加载通用规则
+        else:
+            # 向量检索召回相关规则片段
+            chunks = self.retriever.search(self.sms, k=8, sms_type=self.sms_type)
+            rules_parts = [f"# 召回的专项规则（来源：向量检索）\n"]
+            for i, (chunk, score) in enumerate(chunks, 1):
+                rules_parts.append(
+                    f"### [{i}] [{chunk.category}] {chunk.section}（相似度: {score:.4f}）\n{chunk.content}\n"
+                )
+            rules_text = "\n".join(rules_parts)
+
+        system = build_system_prompt(rules_text, round=round)
+
+        if round == 1:
+            user = f"""## 待审核短信
 ```
 {self.sms}
 ```
 
-## 当前短信类型识别结果
-类型：**{self.sms_type}**（若为"未知"则按通用规范审核）
+## 你的任务
+1. 根据短信内容判断短信类型（验证码/营销/催收/权益通知/未知）
+2. 对照通用规则检查是否存在一票否决项（伪造主体、恐吓威胁、伪造法律文书、泄露隐私等）
+3. 如果没有一票否决项，进入第二轮加载专项规则继续审核
+4. 第一轮请先输出推理过程（Thought/Action/Observation），然后明确告知"第一轮通用规则检查结束，请进入第二轮进行专项规则审核"，暂不输出最终 JSON。"""
+        else:
+            user = f"""## 待审核短信
+```
+{self.sms}
+```
+
+## 短信类型
+类型：**{self.sms_type}**
 
 ## 你的任务
-请按 ReAct 流程推理，然后输出最终 JSON 结果。"""
+上方已通过向量检索召回与该短信最相关的专项规则片段，请对照审核：
+1. 必含信息是否完整
+2. 用语是否规范
+3. 给出最终 JSON 审核结果。"""
 
         messages = [
             LLMMessage(role="system", content=system),
@@ -167,11 +238,10 @@ class ReActSMSAuditor:
         ]
 
         if assistant_reasoning:
-            # 追加上一轮 LLM 的推理内容，让它继续
             messages.append(LLMMessage(role="assistant", content=assistant_reasoning))
             messages.append(LLMMessage(
                 role="user",
-                content="请继续推理，或如果推理已结束，直接输出最终 JSON 结果。"
+                content="请继续推理，最终输出 JSON 结果。"
             ))
 
         return messages
@@ -247,10 +317,11 @@ class ReActSMSAuditor:
         print("─" * 60)
 
         for i in range(self.MAX_ITERATIONS):
-            print(f"\n📝 推理轮次 {i+1}/{self.MAX_ITERATIONS}")
+            round_num = i + 1
+            print(f"\n📝 推理轮次 {round_num}/{self.MAX_ITERATIONS}")
             print("─" * 40)
 
-            messages = self._build_messages(assistant_output)
+            messages = self._build_messages(assistant_output, round=round_num)
 
             temperature = float(os.environ.get("LLM_TEMPERATURE", "1.0"))
             timeout = int(os.environ.get("LLM_TIMEOUT", "120"))
@@ -295,6 +366,14 @@ class ReActSMSAuditor:
             if result:
                 print("\n✅ 成功解析结构化结果")
                 result.raw_response = raw
+                # Round 1 有一票否决项（red）直接返回
+                if round_num == 1 and result.level == "red":
+                    return result
+                # Round 1 其他结果，继续进入 Round 2 做专项审核
+                if round_num == 1:
+                    assistant_output = raw
+                    self.reasoning_steps.append(raw)
+                    continue
                 return result
 
             # 未解析出 JSON，视为推理未完成，继续下一轮
@@ -349,9 +428,14 @@ def print_result(result: AuditResult):
 # ─────────────────────────────────────────────
 
 def main():
-    # 解析参数
-    if len(sys.argv) > 1:
-        sms_content = " ".join(sys.argv[1:])
+    import argparse
+    parser = argparse.ArgumentParser(description="SMS 合规审核 Agent")
+    parser.add_argument("sms", nargs="*", help="短信内容（可省略，交互式输入）")
+    parser.add_argument("-t", "--type", dest="sms_type", help="短信类型（验证码/营销/催收/权益通知）")
+    args = parser.parse_args()
+
+    if args.sms:
+        sms_content = " ".join(args.sms)
     else:
         print("\n📨 请输入待审核的短信内容（输入空行结束）：")
         lines = []
@@ -369,7 +453,7 @@ def main():
         print("⚠️ 未检测到短信内容，请提供短信文本。")
         sys.exit(1)
 
-    agent = ReActSMSAuditor(sms_content)
+    agent = ReActSMSAuditor(sms_content, sms_type=args.sms_type)
     result = agent.audit()
     print_result(result)
 
