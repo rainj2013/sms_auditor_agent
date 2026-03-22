@@ -1,0 +1,15 @@
+[project]
+name = "sms_auditor"
+version = "0.1.0"
+description = "短信合规审核 Agent"
+requires-python = ">=3.10"
+dependencies = [
+    "chromadb>=1.5.5",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
