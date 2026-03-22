@@ -7,8 +7,8 @@
 ## 快速开始
 
 ```bash
-# 设置 API Key（当前默认 provider 为 kimi）
-export KIMI_API_KEY=sk-xxxx
+# 设置 API Key（当前默认 provider 为 minimax）
+export MINIMAX_API_KEY=sk-xxxx
 
 # 单条短信审核
 python3 sms_auditor_llm.py "【XX银行】您已逾期30天，欠款5000元，请立即还款，否则将上报征信黑名单并追究法律责任。"
@@ -52,7 +52,7 @@ python3 sms_auditor_llm.py
 
 所有 Provider 均采用 OpenAI 标准格式（/v1/chat/completions）：
 
-- **kimi** — 月之暗面 Moonshot（默认）
+- **kimi** — 月之暗面 Moonshot
 - **minimax** — MiniMax
 - **openai_compatible** — OpenAI / Claude / Gemini 等兼容接口
 
