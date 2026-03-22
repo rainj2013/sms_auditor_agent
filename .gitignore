@@ -21,6 +21,7 @@ build/
 *.swo
 
 # Local generated
+.chroma_db/
 
 # OS
 .DS_Store
