@@ -1,0 +1,16 @@
+{
+  "provider": "minimax",
+  "kimi": {
+    "model": "kimi-k2.5",
+    "base_url": "https://api.moonshot.cn/v1"
+  },
+  "minimax": {
+    "model": "MiniMax-M2.7-highspeed",
+    "base_url": "https://api.minimaxi.com/v1"
+  },
+  "openai_compatible": {
+    "model": "gpt-4o",
+    "base_url": "https://api.openai.com/v1",
+    "organization": ""
+  }
+}
