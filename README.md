@@ -10,11 +10,14 @@
 # 设置 API Key（当前默认 provider 为 minimax）
 export MINIMAX_API_KEY=sk-xxxx
 
-# 单条短信审核
+# 单条短信审核（非 LangChain 版本）
 python3 sms_auditor_llm.py "【XX银行】您已逾期30天，欠款5000元，请立即还款，否则将上报征信黑名单并追究法律责任。"
 
 # 交互式输入（多行）
 python3 sms_auditor_llm.py
+
+# LangChain 版本（使用 LangChain Agent 框架）
+python3 sms_auditor_langchain.py "【XX银行】您已逾期30天，欠款5000元，请立即还款，否则将上报征信黑名单并追究法律责任。"
 ```
 
 ## 项目结构
@@ -28,10 +31,24 @@ python3 sms_auditor_llm.py
 │   ├── 03_催收短信规范.md
 │   └── 04_权益通知短信规范.md
 ├── llm_config.json                # Provider 配置（不含 API Key）
-├── llm_providers.py               # LLM Provider 抽象层
-├── sms_auditor_llm.py             # ReAct Agent 入口
+├── llm_providers.py               # LLM Provider 抽象层（基于 openai SDK）
+├── embeddings.py                  # Embedding 模型封装
+├── rule_retriever.py              # ChromaDB 向量检索
+├── sms_auditor_llm.py             # ReAct Agent（直接用 openai SDK）
+├── sms_auditor_langchain.py       # LangChain Agent（用 langchain-openai）
 └── README.md
 ```
+
+## 两种 Agent 实现
+
+项目提供两个完全独立的 Agent 实现：
+
+| 文件 | LLM 交互 | 依赖 |
+|------|---------|------|
+| `sms_auditor_llm.py` | 直接用 `openai` SDK | `openai` |
+| `sms_auditor_langchain.py` | 用 `langchain-openai` + LangChain Agent | `langchain`, `langchain-openai` |
+
+两个 Agent 审核逻辑相同，但 LLM 交互方式完全独立，可根据偏好选择。
 
 ## 环境变量
 
@@ -50,7 +67,7 @@ python3 sms_auditor_llm.py
 
 ## 支持的 Provider
 
-所有 Provider 均采用 OpenAI 标准格式（/v1/chat/completions）：
+所有 Provider 均采用 OpenAI 标准格式（/v1/chat/completions），通过 `openai` SDK 调用：
 
 - **kimi** — 月之暗面 Moonshot
 - **minimax** — MiniMax
@@ -60,7 +77,7 @@ python3 sms_auditor_llm.py
 
 ## LLM_DEBUG 流式输出
 
-开启后 LLM 输出内容实时打印，减少等待感：
+（非 LangChain 版本）开启后 LLM 输出内容实时打印，减少等待感：
 
 ```bash
 LLM_DEBUG=1 python3 sms_auditor_llm.py "您的短信内容"
