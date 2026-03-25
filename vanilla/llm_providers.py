@@ -16,7 +16,16 @@ from openai import OpenAI
 # 配置加载
 # ─────────────────────────────────────────────
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "llm_config.json")
+# 向上查找项目根目录
+def _find_root():
+    path = os.path.dirname(__file__)
+    while path != os.path.dirname(path):
+        if os.path.exists(os.path.join(path, "llm_config.json")):
+            return path
+        path = os.path.dirname(path)
+    return os.path.dirname(__file__)
+
+CONFIG_PATH = os.path.join(_find_root(), "llm_config.json")
 
 
 def load_config() -> dict:

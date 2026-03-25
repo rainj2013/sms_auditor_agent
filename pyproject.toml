@@ -8,6 +8,7 @@ dependencies = [
     "openai>=1.0.0",
     "langchain>=1.0.0",
     "langchain-openai>=1.0.0",
+    "langchain-chroma>=1.0.0",
 ]
 
 [project.optional-dependencies]

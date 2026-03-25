@@ -13,11 +13,20 @@ from dataclasses import dataclass
 import chromadb
 from chromadb import PersistentClient
 
-from embeddings import get_embedding_client
+from vanilla.embeddings import get_embedding_client
 
 
-RULES_DIR = os.path.join(os.path.dirname(__file__), "rules")
-CHROMA_DIR = os.path.join(os.path.dirname(__file__), ".chroma_db")
+# 向上查找项目根目录
+def _find_root():
+    path = os.path.dirname(__file__)
+    while path != os.path.dirname(path):
+        if os.path.exists(os.path.join(path, "rules")):
+            return path
+        path = os.path.dirname(path)
+    return os.path.dirname(__file__)
+
+RULES_DIR = os.path.join(_find_root(), "rules")
+CHROMA_DIR = os.path.join(_find_root(), ".chroma_db")
 
 
 @dataclass

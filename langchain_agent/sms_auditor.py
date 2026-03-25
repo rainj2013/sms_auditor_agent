@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-SMS 合规审核 Agent — 基于 LangChain 的 ReAct 实现
-使用 LangChain 原生 Agent 框架，工具调用由 LangChain 自动处理
+SMS 合规审核 Agent — LangChain 版本
+使用 LangChain 原生 Agent 框架、VectorStore Retriever
 """
 
 import json
@@ -16,13 +16,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 
-from rule_retriever import RuleRetriever
-
-# ─────────────────────────────────────────────
-# 路径
-# ─────────────────────────────────────────────
-
-RULES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules")
+from langchain_agent.rule_retriever import get_vectorstore, search_rules
 
 
 # ─────────────────────────────────────────────
@@ -40,8 +34,8 @@ class CheckItem:
 @dataclass
 class AuditResult:
     sms_type: str
-    overall: str          # 🟢🟡🔴
-    level: str            # green/yellow/red
+    overall: str
+    level: str
     reason: str
     checks: list[CheckItem]
     corrected_content: str = ""
@@ -51,16 +45,6 @@ class AuditResult:
 # ─────────────────────────────────────────────
 # LangChain Tool：向量检索召回专项规则
 # ─────────────────────────────────────────────
-
-_retriever_cache: Optional[RuleRetriever] = None
-
-
-def _get_retriever() -> RuleRetriever:
-    global _retriever_cache
-    if _retriever_cache is None:
-        _retriever_cache = RuleRetriever()
-    return _retriever_cache
-
 
 @tool
 def retrieve_rules(sms_content: str, sms_type: str = "") -> str:
@@ -74,16 +58,15 @@ def retrieve_rules(sms_content: str, sms_type: str = "") -> str:
     Returns:
         召回的规则列表文本
     """
-    retriever = _get_retriever()
-    chunks = retriever.search(sms_content, k=8, sms_type=sms_type)
+    chunks = search_rules(sms_content, k=8, sms_type=sms_type)
 
     if not chunks:
         return "未召回任何规则片段。"
 
     parts = []
-    for i, (chunk, score) in enumerate(chunks, 1):
+    for i, (doc, score) in enumerate(chunks, 1):
         parts.append(
-            f"[{i}] 类型:{chunk.category} | 章节:{chunk.section} | 相似度:{score:.4f}\n{chunk.content}"
+            f"[{i}] 类型:{doc.metadata.get('category')} | 章节:{doc.metadata.get('section')} | 相似度:{score:.4f}\n{doc.page_content}"
         )
     return "\n---\n".join(parts)
 
@@ -147,7 +130,7 @@ SYSTEM_PROMPT = """你是一名专业的金融行业短信合规审核员。
 
 
 # ─────────────────────────────────────────────
-# ReAct 推理循环
+# 辅助函数
 # ─────────────────────────────────────────────
 
 def _identify_sms_type(sms: str) -> str:
@@ -215,6 +198,10 @@ def _build_result(data: dict, raw_response: str) -> AuditResult:
     )
 
 
+# ─────────────────────────────────────────────
+# Agent 执行
+# ─────────────────────────────────────────────
+
 def run_audit(sms_content: str) -> AuditResult:
     """执行 LangChain Agent 审核，返回 AuditResult"""
     sms = sms_content.strip()
@@ -267,9 +254,7 @@ def run_audit(sms_content: str) -> AuditResult:
     output = ""
     try:
         inputs = {"messages": [{"role": "user", "content": user_input}]}
-        # stream_mode="values" returns full state at each step
         for chunk in agent.stream(inputs, stream_mode="values"):
-            # Get the last message content
             messages = chunk.get("messages", [])
             for msg in messages:
                 if isinstance(msg, AIMessage) and msg.content:
@@ -293,7 +278,6 @@ def run_audit(sms_content: str) -> AuditResult:
         print("\n✅ 成功解析结构化结果")
         return parsed
 
-    # 未解析出 JSON
     return AuditResult(
         sms_type=sms_type,
         overall="🟡 整改",

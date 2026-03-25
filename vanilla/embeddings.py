@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 
-from llm_providers import load_config
+from vanilla.llm_providers import load_config
 
 
 @dataclass
