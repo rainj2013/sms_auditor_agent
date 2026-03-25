@@ -59,27 +59,35 @@ class EmbeddingClient:
 
     def embed(self, text: str) -> EmbeddingResult:
         """获取单条文本的 embedding 向量"""
-        response = self._client.embeddings.create(
-            model=self.model,
-            input=[text],
-            extra_body={"type": "db"},
+        # MiniMax 返回格式与 OpenAI 不兼容，用底层 post 方法绕过 SDK 解析
+        raw = self._client.post(
+            "/embeddings",
+            body={"model": self.model, "texts": [text], "type": "db"},
+            cast_to=object,
         )
-        # 适配 MiniMax 返回格式：response.data[0].embedding
-        embedding_data = response.data[0].embedding
-        return EmbeddingResult(embedding=embedding_data, model=response.model)
+        vectors = raw.get("vectors", [])
+        if not vectors:
+            raise RuntimeError(f"Embeddings 返回为空：{raw}")
+        embedding = vectors[0] if isinstance(vectors[0], list) else vectors
+        return EmbeddingResult(embedding=embedding, model=raw.get("model", self.model))
 
     def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         """批量获取文本 embedding"""
-        response = self._client.embeddings.create(
-            model=self.model,
-            input=texts,
-            extra_body={"type": "db"},
+        raw = self._client.post(
+            "/embeddings",
+            body={"model": self.model, "texts": texts, "type": "db"},
+            cast_to=object,
         )
+        vectors = raw.get("vectors", [])
+        if not vectors:
+            raise RuntimeError(f"Embeddings 返回为空：{raw}")
+
         results = []
-        for item in response.data:
+        for vec in vectors:
+            embedding = vec if isinstance(vec, list) else vec.get("embedding")
             results.append(EmbeddingResult(
-                embedding=item.embedding,
-                model=response.model
+                embedding=embedding,
+                model=raw.get("model", self.model)
             ))
         return results
 
