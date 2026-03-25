@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Provider 抽象层 — 所有 Provider 均采用 OpenAI 标准格式
+LLM Provider 抽象层 — 基于 OpenAI SDK
 只需在 llm_config.json 中切换 provider 字段即可切换模型
 """
 
@@ -9,6 +9,8 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Literal
+
+from openai import OpenAI
 
 # ─────────────────────────────────────────────
 # 配置加载
@@ -58,25 +60,24 @@ class LLMProvider(ABC):
 
 
 # ─────────────────────────────────────────────
-# OpenAI 标准格式 Provider
-# 所有 OpenAI 兼容接口均使用此类，包括：OpenAI、Kimi、MiniMax、Claude（需代理）、Gemini 等
+# OpenAI SDK Provider
 # ─────────────────────────────────────────────
 
 class OpenAIProvider(LLMProvider):
-    """
-    OpenAI 标准格式 Provider
-    通过环境变量或 llm_config.json 配置 api_key / model / base_url
-    """
+    """基于 OpenAI SDK 的 Provider，支持 OpenAI 兼容接口"""
 
     def __init__(self, api_key: str, model: str,
                  base_url: str = "https://api.openai.com/v1",
                  organization: str = ""):
         if not api_key:
             raise ValueError("API Key 未设置，请设置环境变量")
-        self.api_key = api_key
         self.model = model
-        self.base_url = base_url.rstrip("/")
-        self.organization = organization
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=base_url.rstrip("/"),
+            organization=organization or None,
+            timeout=120,
+        )
 
     def chat(
         self,
@@ -88,85 +89,51 @@ class OpenAIProvider(LLMProvider):
         stream_callback=None,
         **kwargs
     ) -> LLMResponse:
-        import urllib.request
-        import urllib.error
-
-        url = f"{self.base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        if self.organization:
-            headers["OpenAI-Organization"] = self.organization
-
-        payload = {
-            "model": self.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": stream,
-        }
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers=headers,
-            method="POST"
-        )
+        openai_messages = [{"role": m.role, "content": m.content} for m in messages]
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                if stream:
-                    return self._handle_stream(resp, stream_callback)
-                result = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8")
-            raise RuntimeError(f"API 错误 {e.code}：{error_body}")
-
-        choices = result.get("choices", [])
-        content = choices[0].get("message", {}).get("content", "") if choices else ""
-
-        return LLMResponse(
-            content=content,
-            model=self.model,
-            usage=result.get("usage", {}),
-            raw=result
-        )
-
-    def _handle_stream(self, resp, stream_callback=None) -> LLMResponse:
-        """处理 SSE 流式输出"""
-        accumulated = ""
-
-        try:
-            for line in resp:
-                line = line.decode("utf-8").strip()
-                if not line or line.startswith(":"):
-                    continue
-                if line.startswith("data: "):
-                    line = line[6:]
-                if line == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                content_delta = delta.get("content", "") or delta.get("text", "")
-                if content_delta:
-                    accumulated += content_delta
-                    if stream_callback:
-                        stream_callback(content_delta)
+            if stream:
+                accumulated = ""
+                stream_resp = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=True,
+                    timeout=timeout,
+                )
+                for chunk in stream_resp:
+                    content_delta = chunk.choices[0].delta.content or ""
+                    if content_delta:
+                        accumulated += content_delta
+                        if stream_callback:
+                            stream_callback(content_delta)
+                return LLMResponse(
+                    content=accumulated,
+                    model=self.model,
+                    usage={},
+                    raw={},
+                )
+            else:
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                )
+                return LLMResponse(
+                    content=response.choices[0].message.content or "",
+                    model=response.model,
+                    usage={
+                        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
+                        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
+                        "total_tokens": response.usage.total_tokens if response.usage else 0,
+                    },
+                    raw=response.model_dump(),
+                )
         except Exception as e:
-            raise RuntimeError(f"流式读取错误：{e}")
-
-        return LLMResponse(
-            content=accumulated,
-            model=self.model,
-            usage={},
-            raw={}
-        )
+            raise RuntimeError(f"API 调用失败：{e}")
 
 
 # ─────────────────────────────────────────────
