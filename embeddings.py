@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-MiniMax Embeddings 封装 — 用于规则向量检索
+MiniMax Embeddings 封装 — 基于 OpenAI SDK
+用于规则向量检索
 """
 
-import json
 import os
 from dataclasses import dataclass
-from typing import Literal
 
-import urllib.request
-import urllib.error
+from openai import OpenAI
 
 from llm_providers import load_config
 
@@ -27,6 +25,7 @@ def get_embedding_client() -> "EmbeddingClient":
 class EmbeddingClient:
     """
     MiniMax Embeddings 客户端（OpenAI 兼容格式）
+    使用 OpenAI SDK 调用
     """
 
     def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None):
@@ -52,80 +51,35 @@ class EmbeddingClient:
             or cfg.get("model", "embo-01")
         )
 
-    def embed(self, text: str) -> EmbeddingResult:
-        """获取单条文本的 embedding 向量"""
-        url = f"{self.base_url}/embeddings"
-
-        payload = {
-            "model": self.model,
-            "texts": [text],
-            "type": "db",  # MiniMax embeddings 必填：db=数据库向量化
-        }
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST"
+        self._client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url.rstrip("/"),
+            timeout=120,
         )
 
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8")
-            raise RuntimeError(f"Embeddings API 错误 {e.code}：{error_body}")
-
-        vectors = result.get("vectors", [])
-        if not vectors:
-            raise RuntimeError(f"Embeddings 返回为空：{result}")
-        # vectors 是 float 数组的列表
-        embedding = vectors[0] if isinstance(vectors[0], list) else vectors
-
-        return EmbeddingResult(embedding=embedding, model=result.get("model", self.model))
+    def embed(self, text: str) -> EmbeddingResult:
+        """获取单条文本的 embedding 向量"""
+        response = self._client.embeddings.create(
+            model=self.model,
+            input=[text],
+            extra_body={"type": "db"},
+        )
+        # 适配 MiniMax 返回格式：response.data[0].embedding
+        embedding_data = response.data[0].embedding
+        return EmbeddingResult(embedding=embedding_data, model=response.model)
 
     def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:
         """批量获取文本 embedding"""
-        url = f"{self.base_url}/embeddings"
-
-        payload = {
-            "model": self.model,
-            "texts": texts,
-            "type": "db",
-        }
-
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST"
+        response = self._client.embeddings.create(
+            model=self.model,
+            input=texts,
+            extra_body={"type": "db"},
         )
-
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8")
-            raise RuntimeError(f"Embeddings API 错误 {e.code}：{error_body}")
-
-        vectors = result.get("vectors", [])
-        if not vectors:
-            raise RuntimeError(f"Embeddings 返回为空：{result}")
-
         results = []
-        for vec in vectors:
-            embedding = vec if isinstance(vec, list) else vec.get("embedding")
+        for item in response.data:
             results.append(EmbeddingResult(
-                embedding=embedding,
-                model=result.get("model", self.model)
+                embedding=item.embedding,
+                model=response.model
             ))
         return results
 
