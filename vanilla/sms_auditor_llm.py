@@ -11,8 +11,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-from llm_providers import LLMMessage, get_provider
-from rule_retriever import RuleRetriever
+from vanilla.llm_providers import LLMMessage, get_provider
+from vanilla.rule_retriever import RuleRetriever
 
 # ─────────────────────────────────────────────
 # 路径

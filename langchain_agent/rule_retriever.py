@@ -3,11 +3,8 @@
 规则向量检索模块 — LangChain 版本
 - 使用 langchain_chroma.Chroma 封装 ChromaDB
 - 使用 langchain_core.embeddings 抽象
+- 完全独立，不依赖 vanilla
 """
-
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import os
 from dataclasses import dataclass
@@ -15,17 +12,89 @@ from dataclasses import dataclass
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
-from vanilla.rule_retriever import split_rules_into_chunks, RuleChunk
 
-RULES_DIR = os.path.join(os.path.dirname(__file__), "..", "rules")
-CHROMA_DIR = os.path.join(os.path.dirname(__file__), "..", ".chroma_db")
+def _find_root():
+    """向上查找项目根目录"""
+    path = os.path.dirname(__file__)
+    while path != os.path.dirname(path):
+        if os.path.exists(os.path.join(path, "rules")):
+            return path
+        path = os.path.dirname(path)
+    return os.path.dirname(__file__)
+
+
+@dataclass
+class RuleChunk:
+    content: str
+    source: str
+    category: str
+    section: str
+
+
+def split_rules_into_chunks() -> list[RuleChunk]:
+    """按章节/条目拆分规则文档为小块"""
+    rules_dir = os.path.join(_find_root(), "rules")
+
+    rule_files = {
+        "00_短信合规总纲.md": "通用规则",
+        "01_验证码短信规范.md": "验证码",
+        "02_营销短信规范.md": "营销",
+        "03_催收短信规范.md": "催收",
+        "04_权益通知短信规范.md": "权益通知",
+    }
+
+    chunks = []
+
+    for filename, category in rule_files.items():
+        filepath = os.path.join(rules_dir, filename)
+        if not os.path.exists(filepath):
+            continue
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        lines = content.split("\n")
+        current_section = "全文"
+        current_lines = []
+
+        for line in lines:
+            if line.startswith("## ") or line.startswith("### "):
+                if current_lines:
+                    chunk_text = "\n".join(current_lines).strip()
+                    if chunk_text:
+                        chunks.append(RuleChunk(
+                            content=chunk_text,
+                            source=filename,
+                            category=category,
+                            section=current_section,
+                        ))
+                current_section = line.lstrip("#").strip()
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+
+        if current_lines:
+            chunk_text = "\n".join(current_lines).strip()
+            if chunk_text:
+                chunks.append(RuleChunk(
+                    content=chunk_text,
+                    source=filename,
+                    category=category,
+                    section=current_section,
+                ))
+
+    return chunks
+
+
+RULES_DIR = os.path.join(_find_root(), "rules")
+CHROMA_DIR = os.path.join(_find_root(), ".chroma_db")
 
 
 def get_vectorstore(force_rebuild: bool = False) -> Chroma:
     """
     获取 Chroma 向量存储，使用 MiniMax Embeddings
     """
-    from langchain.minimax_embeddings import MiniMaxEmbeddings
+    from langchain_agent.minimax_embeddings import MiniMaxEmbeddings
 
     embeddings = MiniMaxEmbeddings()
 
